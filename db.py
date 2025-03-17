@@ -14,16 +14,16 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     tg_id = Column(String)
     username = Column(String)
-    type1 = Column(Integer)
-    type2 = Column(Integer)
-    type3 = Column(Integer)
-    type4 = Column(Integer)
-    type5 = Column(Integer)
-    type6 = Column(Integer)
-    type7 = Column(Integer)
-    type8 = Column(Integer)
-    type9 = Column(Integer)
-    type10 = Column(Integer)
+    type1 = Column(String)
+    type2 = Column(String)
+    type3 = Column(String)
+    type4 = Column(String)
+    type5 = Column(String)
+    type6 = Column(String)
+    type7 = Column(String)
+    type8 = Column(String)
+    type9 = Column(String)
+    type10 = Column(String)
 
     def __repr__(self):
         return f"<User({self.id}, {self.tg_id}, {self.username}, {self.type1}, {self.type2}, {self.type3}, {self.type4}, {self.type5}, {self.type6}, {self.type7}, {self.type8}, {self.type9}, {self.type10},)>"
@@ -75,25 +75,25 @@ def getUserByUsername(key:str):
 
 def getUsersBySub(key:int):
     if key == 1:
-        user = session.query(User).filter_by(type1=1)
+        user = session.query(User).filter(User.type1 != None, User.type1 != '')
     elif key == 2:
-        user = session.query(User).filter_by(type2=1)
+        user = session.query(User).filter(User.type2 != None, User.type2 != '')
     elif key == 3:
-        user = session.query(User).filter_by(type3=1)
+        user = session.query(User).filter(User.type3 != None, User.type3 != '')
     elif key == 4:
-        user = session.query(User).filter_by(type4=1)
+        user = session.query(User).filter(User.type4 != None, User.type4 != '')
     elif key == 5:
-        user = session.query(User).filter_by(type5=1)
+        user = session.query(User).filter(User.type5 != None, User.type5 != '')
     elif key == 6:
-        user = session.query(User).filter_by(type6=1)
+        user = session.query(User).filter(User.type6 != None, User.type6 != '')
     elif key == 7:
-        user = session.query(User).filter_by(type7=1)
+        user = session.query(User).filter(User.type7 != None, User.type7 != '')
     elif key == 8:
-        user = session.query(User).filter_by(type8=1)
+        user = session.query(User).filter(User.type8 != None, User.type8 != '')
     elif key == 9:
-        user = session.query(User).filter_by(type9=1)
+        user = session.query(User).filter(User.type9 != None, User.type9 != '')
     elif key == 10:
-        user = session.query(User).filter_by(type10=1)
+        user = session.query(User).filter(User.type10 != None, User.type10 != '')
     return user
 
 def checkUsers():
