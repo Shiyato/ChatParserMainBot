@@ -67,16 +67,19 @@ async def main():
         if not rf:
             for keyword in keywords:
                 if keyword in message_text:
+                    cat = int(check_cat(message_text))
+                    subs_t = ["Разработка", "Маркетинг", "Дизайн", "Копирайтинг", "Видеоконтент", "Продюсирование", "Разное"]
+                    text_cat = subs_t[cat-1]
                     sender = await limited_get_sender(event)
                     print(f'Найдено сообщение с ключевым словом "{keyword}" в чате {event.chat.title}:')
                     print(f'Отправитель: {sender.first_name} {sender.last_name} (@{sender.username})')
                     print(f'Сообщение: {event.text}\n')
                     if sender.username not in [None, 'None']:
-                        users = db.getUsersBySub(int(check_cat(message_text)))
+                        users = db.getUsersBySub(cat)
                         l = 0
                         for user in users:
                             l += 1
-                            await bot.send_message(user.tg_id, f"{message_text}, @{sender.username}")
+                            await bot.send_message(user.tg_id, f"Категория заявки: {text_cat} \n\n{message_text}, @{sender.username}")
                         print(f'Заявку получило {l} пользовате(ль/ей)')
                     break
 
