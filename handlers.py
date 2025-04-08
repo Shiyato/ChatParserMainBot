@@ -1,70 +1,33 @@
 from aiogram import types, F, Router
 from aiogram import Bot
-from aiogram.types import Message, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.media_group import MediaGroupBuilder
 
-import random
+import payment_process
+import random, math
 import config
 import kb, db
 import text
 import datetime
+from datetime import timedelta
+import os
+import uuid
+
+from yookassa import Configuration, Payment
+
+from funcs import days_until_date, sub_date, decline_day, buy_sub
 
 router = Router()
 bot = Bot(token=config.BOT_TOKEN)
-
-def sub_date():
-    """
-      Получает текущую дату и время, прибавляет 30 дней и возвращает результат в виде строки.
-      """
-    today = datetime.datetime.now()
-    dateplus = today + datetime.timedelta(days=30)
-    return dateplus.strftime("%Y-%m-%d")  # Форматируем в строку в формате год-месяц-день
-
-def days_until_date(date_string):
-  try:
-    target_date = datetime.datetime.strptime(date_string, "%Y-%m-%d").date()  # Convert the string to a date object
-  except ValueError:
-    print("Error: Invalid date format. Use '%Y-%m-%d'.")
-    return None
-
-  today = datetime.date.today()  # Get the current date (without time)
-  difference = target_date - today  # Calculate the difference between the dates
-
-  return difference.days  # Return the number of days in the difference
-
-def decline_day(number):
-  """
-  Declines the word "day" and adds the appropriate "left" phrase according to Russian grammar.
-
-  Args:
-    number: An integer.
-
-  Returns:
-    A string containing the "left" phrase, the number, and the declined word "day".
-  """
-  remainder_10 = number % 10
-  remainder_100 = number % 100
-
-  if remainder_10 == 1 and remainder_100 != 11:
-    word = "день"
-    left_word = "остался"
-  elif 2 <= remainder_10 <= 4 and (remainder_100 < 10 or remainder_100 >= 20):
-    word = "дня"
-    left_word = "осталось"
-  else:
-    word = "дней"
-    left_word = "осталось"
-
-  return f"{left_word} {number} {word}"
-
 
 class Form(StatesGroup):
     menu = State()
     admin = State()
     post = State()
+    buying = State()
 
 @router.message(F.text == "Старт")
 @router.message(F.text == "Начать")
@@ -74,7 +37,22 @@ async def start(message: Message):
 
 @router.message(Command("help"))
 async def help(message: Message):
-    await message.answer(text.help, reply_markup=kb.back_to_menu)
+    await message.answer(text.help, reply_markup=kb.help_menu)
+
+@router.callback_query(F.data == "help")
+async def help_menu(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await callback_query.message.edit_text(text.help, reply_markup=kb.help_menu)
+
+@router.callback_query(F.data == "help1")
+async def help_menu(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await callback_query.message.edit_text(text.about, reply_markup=kb.help_back)
+
+@router.callback_query(F.data == "help2")
+async def help_menu(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await callback_query.message.edit_text(text.cat_help, reply_markup=kb.help_back)
 
 @router.message(Command("exit"))
 async def exit(state: FSMContext):
@@ -84,6 +62,59 @@ async def exit(state: FSMContext):
 async def menu(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await callback_query.message.edit_text(text.menu, reply_markup=kb.menu)
+
+
+@router.message(Command("start"))
+async def start(message: Message):
+    await message.answer(text=text.start, reply_markup=kb.menu)
+
+#оплата
+
+temp_payments = {} #в продакшене заменить на бд
+
+Configuration.account_id = config.YOOKASSA_SHOP_ID
+Configuration.secret_key = config.YOOKASSA_SECRET_KEY
+
+@router.callback_query(F.data == "buy")
+async def handle_payment(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    payment = Payment.create({
+        "amount": {"value": "500.00", "currency": "RUB"},
+        "confirmation": {
+            "type": "redirect",
+            "return_url": f"https://t.me/zhdanov_ph_test1_bot"
+        },
+        "description": "Подписка на 1 месяц",
+        "metadata": {"user_id": callback_query.message.from_user.id}
+    }, str(uuid.uuid4()))
+
+    temp_payments[payment.id] = {
+        "user_id": callback_query.message.from_user.id,
+        "status": payment.status,
+        "created_at": datetime.datetime.now(),
+        "amount": payment.amount.value
+    }
+
+    await callback_query.message.answer(f"Оплатите 500 руб. {payment.confirmation.confirmation_url}")
+    if await payment_process.check_payment_status_enhanced(payment.id):
+        payment = Payment.find_one(payment.id)
+        if payment.status == "waiting_for_capture":
+            idempotence_key = str(uuid.uuid4())
+            response = Payment.capture(
+                payment.id,
+                {
+                    "amount": {
+                        "value": f"{payment['amount']['value']}",
+                        "currency": "RUB"
+                    }
+                },
+                idempotence_key
+            )
+        await callback_query.message.answer("Платёж прошёл успешно, поздравляем!", reply_markup=kb.back_to_menu)
+        await buy_sub(callback_query.message.from_user.id, callback_query.message.from_user.username, payment.captured_at)
+        await db.addPayment(callback_query.message.from_user.id, callback_query.message.from_user.username, payment.id)
+    else:
+        await callback_query.message.answer("Платёж прошёл неудачно, попробуйте ещё раз или напишите в поддержку", reply_markup=kb.back_to_menu)
 
 #Админка
 
@@ -218,7 +249,7 @@ async def admin1(callback_query: types.CallbackQuery, state: FSMContext):
 @router.message(Form.post)
 async def load_post(message: Message, state: FSMContext):
     data = await state.get_data()
-    users = db.getUsersBySub(data['load_type'])
+    users = db.getUsersByCat(data['load_type'])
     l = 0
     for user in users:
         l += 1
@@ -237,21 +268,20 @@ async def process_callback_button1(callback_query: types.CallbackQuery):
         db.addUser(uid, username)
     user = db.getUserByTgID(uid)
     texts = ["Разработка", "Маркетинг", "Дизайн", "Копирайтинг", "Видеоконтент", "Продюссирование", "Разное", "Назад"]
-    type1, type2, type3, type4, type5, type6, type7, type8, type9, type10 = days_until_date(user.type1), days_until_date(user.type2), days_until_date(user.type3), days_until_date(user.type4), days_until_date(user.type5), days_until_date(user.type6), days_until_date(user.type7), days_until_date(user.type8), days_until_date(user.type9), days_until_date(user.type10)
-    if type1 is not None:
-        texts[0] += f" ({decline_day(type1)})"
-    if type2 is not None:
-        texts[1] += f" ({decline_day(type2)})"
-    if type3 is not None:
-        texts[2] += f" ({decline_day(type3)})"
-    if type4 is not None:
-        texts[3] += f" ({decline_day(type4)})"
-    if type5 is not None:
-        texts[4] += f" ({decline_day(type5)})"
-    if type6 is not None:
-        texts[5] += f" ({decline_day(type6)})"
-    if type7 is not None:
-        texts[6] += f" ({decline_day(type7)})"
+    if user.type1 != 0:
+        texts[0] += f" (Выбрана)"
+    if user.type2 != 0:
+        texts[1] += f" (Выбрана)"
+    if user.type3 != 0:
+        texts[2] += f" (Выбрана)"
+    if user.type4 != 0:
+        texts[3] += f" (Выбрана)"
+    if user.type5 != 0:
+        texts[4] += f" (Выбрана)"
+    if user.type6 != 0:
+        texts[5] += f" (Выбрана)"
+    if user.type7 != 0:
+        texts[6] += f" (Выбрана)"
 
     categories = [
         [InlineKeyboardButton(text=texts[0], callback_data="sub_menu1")],
@@ -264,7 +294,17 @@ async def process_callback_button1(callback_query: types.CallbackQuery):
         [InlineKeyboardButton(text=texts[7], callback_data="menu")]
     ]
     categories = InlineKeyboardMarkup(inline_keyboard=categories)
-    await callback_query.message.edit_text(text.cat, reply_markup=categories)
+    sub = db.checkSubscription(user.tg_id)
+
+    if sub:
+        days_until = math.ceil(days_until_date(sub.end_date))
+        if days_until > 0:
+            await callback_query.message.edit_text(f"""<b>{decline_day(days_until)} подписки</b>""", reply_markup=categories)
+        else:
+            await callback_query.message.edit_text(f"""<b>Подписка не оформлена</b>""", reply_markup=categories)
+    else:
+        await callback_query.message.edit_text(f"""<b>Подписка не оформлена</b>""", reply_markup=categories)
+
 
 @router.callback_query(F.data == "sub_menu1")
 async def admin1(callback_query: types.CallbackQuery):
@@ -272,12 +312,14 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type1) is not None:
+        if user.type1 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
-            print('already')
+            db.rewriteUser(user_id, username, type1=0)
+
+            print('already', user_id, username, user)
         else:
             db.rewriteUser(user_id, username, type1=type)
             print('rewrite')
@@ -293,11 +335,12 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type2) is not None:
+        if user.type2 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
+            db.rewriteUser(user_id, username, type2=0)
             print('already')
         else:
             db.rewriteUser(user_id, username, type2=type)
@@ -314,11 +357,12 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type3) is not None:
+        if user.type3 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
+            db.rewriteUser(user_id, username, type3=0)
             print('already')
         else:
             db.rewriteUser(user_id, username, type3=type)
@@ -335,11 +379,12 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type4) is not None:
+        if user.type4 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
+            db.rewriteUser(user_id, username, type4=0)
             print('already')
         else:
             db.rewriteUser(user_id, username, type4=type)
@@ -356,11 +401,12 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type5) is not None:
+        if user.type5 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
+            db.rewriteUser(user_id, username, type5=0)
             print('already')
         else:
             db.rewriteUser(user_id, username, type5=type)
@@ -377,11 +423,12 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type6) is not None:
+        if user.type6 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
+            db.rewriteUser(user_id, username, type6=0)
             print('already')
         else:
             db.rewriteUser(user_id, username, type6=type)
@@ -398,11 +445,12 @@ async def admin1(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
     user = db.getUserByTgID(user_id)
-    type = sub_date()
+    type = 1
     print("User_By_ID", user)
     if user:
-        if days_until_date(user.type7) is not None:
+        if user.type7 == type:
             await callback_query.message.edit_text(text.cat_already, reply_markup=kb.back_to_cat)
+            db.rewriteUser(user_id, username, type7=0)
             print('already')
         else:
             db.rewriteUser(user_id, username, type7=type)
@@ -417,7 +465,7 @@ async def admin1(callback_query: types.CallbackQuery):
 @router.message(Form.post)
 async def load_post(message: Message, state: FSMContext):
     data = await state.get_data()
-    users = db.getUsersBySub(data['load_type'])
+    users = db.getUsersByCat(data['load_type'])
     l = 0
     for user in users:
         l += 1
@@ -426,7 +474,3 @@ async def load_post(message: Message, state: FSMContext):
 
 
 
-@router.callback_query(F.data == "faq")
-async def process_callback_button1(callback_query: types.CallbackQuery):
-    await bot.answer_callback_query(callback_query.id)
-    await callback_query.message.edit_text(text.faq, reply_markup=kb.back_to_menu)
